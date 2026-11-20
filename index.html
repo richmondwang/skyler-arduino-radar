@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Submarine Sonar</title>
+<style>
+  :root {
+    --bg: #010805;
+    --green: #33ff88;
+    --green-dim: #0f5f33;
+    --green-faint: rgba(51,255,136,.12);
+    --blue: #3aa8ff;
+    --red: #ff3344;
+    --text: #9dffc6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font-family: "Consolas", "Courier New", monospace; }
+  canvas { position: fixed; inset: 0; display: block; }
+  body::after { /* CRT scanlines */
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,.18) 0 1px, transparent 1px 3px);
+  }
+  .hud { position: fixed; z-index: 2; pointer-events: none; text-shadow: 0 0 6px rgba(51,255,136,.7); }
+  #topbar { top: 14px; left: 16px; right: 16px; display: flex; justify-content: space-between;
+    align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: clamp(16px, 2.2vw, 26px); letter-spacing: .35em; color: var(--green); font-weight: 700; }
+  .sub { font-size: 12px; opacity: .7; letter-spacing: .2em; margin-top: 4px; }
+  #link { font-size: 12px; text-align: right; letter-spacing: .1em; }
+  #link .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px;
+    background: #555; vertical-align: middle; }
+  #link.live .dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  #link.demo .dot { background: #ffbb33; box-shadow: 0 0 8px #ffbb33; }
+  #link.error .dot { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+  #alert { top: 70px; left: 50%; transform: translateX(-50%); padding: 10px 26px;
+    border: 1px solid currentColor; font-size: clamp(14px, 1.8vw, 22px); letter-spacing: .3em;
+    font-weight: 700; white-space: nowrap; background: rgba(0,0,0,.55); }
+  #alert.clear { color: var(--green); }
+  #alert.warn  { color: var(--blue); text-shadow: 0 0 8px var(--blue); }
+  #alert.danger { color: var(--red); text-shadow: 0 0 10px var(--red); animation: blink .5s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  #readout { left: 16px; bottom: 16px; font-size: 13px; line-height: 1.7; min-width: 210px;
+    background: rgba(0,10,5,.6); border: 1px solid var(--green-dim); padding: 10px 14px; }
+  #readout b { color: var(--green); }
+  #contacts { right: 16px; bottom: 16px; font-size: 13px; line-height: 1.6; min-width: 230px;
+    background: rgba(0,10,5,.6); border: 1px solid var(--green-dim); padding: 10px 14px; max-height: 40vh; overflow: hidden; }
+  #contacts .row { display: flex; justify-content: space-between; gap: 16px; }
+  #contacts .row.danger { color: var(--red); }
+  #contacts .row.warn { color: var(--blue); }
+  .label { opacity: .65; font-size: 11px; letter-spacing: .2em; margin-bottom: 4px; }
+  #keys { position: fixed; z-index: 2; bottom: 16px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; opacity: .55; letter-spacing: .1em; text-align: center; white-space: nowrap; }
+
+  #start { position: fixed; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 18px; background: rgba(0,8,4,.88); cursor: pointer; text-align: center; padding: 16px; }
+  #start h2 { color: var(--green); letter-spacing: .4em; font-size: clamp(20px, 4vw, 40px); text-shadow: 0 0 14px var(--green); }
+  #start p { opacity: .8; letter-spacing: .15em; font-size: 14px; }
+  #start .btn { border: 1px solid var(--green); padding: 12px 30px; color: var(--green); letter-spacing: .3em;
+    box-shadow: 0 0 18px rgba(51,255,136,.35) inset, 0 0 18px rgba(51,255,136,.25); }
+
+  @media (max-width: 640px) {
+    #readout, #contacts { font-size: 11px; min-width: 0; padding: 8px 10px; }
+    #contacts { max-height: 28vh; }
+    #keys { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="radar"></canvas>
+
+<div class="hud" id="topbar">
+  <div>
+    <h1>SONAR // 180°</h1>
+    <div class="sub">ACTIVE ACOUSTIC SEARCH</div>
+  </div>
+  <div id="link"><span class="dot"></span><span id="linkText">CONNECTING…</span><div id="linkMsg" class="sub"></div></div>
+</div>
+
+<div class="hud clear" id="alert">ALL CLEAR</div>
+
+<div class="hud" id="readout">
+  <div class="label">BEAM</div>
+  BEARING&nbsp; <b id="rAngle">---</b>°<br>
+  RANGE&nbsp;&nbsp;&nbsp; <b id="rDist">---</b><br>
+  NEAREST&nbsp; <b id="rNear">---</b><br>
+  SCALE&nbsp;&nbsp;&nbsp; <b id="rScale">---</b> cm
+</div>
+
+<div class="hud" id="contacts">
+  <div class="label">CONTACTS</div>
+  <div id="contactList"><div style="opacity:.5">NO CONTACTS</div></div>
+</div>
+
+<div id="keys">[+/-] RANGE · [M] MIRROR · [S] SOUND ON/OFF · [C] CLEAR</div>
+
+<div id="start">
+  <h2>SONAR STATION</h2>
+  <p>Click anywhere to bring the sonar online (turns on audio)</p>
+  <div class="btn">ENGAGE</div>
+</div>
+
+<script>
+(() => {
+  // ---------- config ----------
+  const DANGER = 20, WARN = 50;
+  const SCALES = [50, 100, 150, 200, 250];
+  let scaleIdx = 2;                 // default 150 cm
+  let mirror = localGet("mirror") === "1";
+  let soundOn = localGet("sound") !== "0";
+  const BLIP_LIFE = 6000;           // ms a blip stays visible
+
+  function localGet(k) { try { return localStorage.getItem("sonar." + k); } catch { return null; } }
+  function localSet(k, v) { try { localStorage.setItem("sonar." + k, v); } catch {} }
+
+  // ---------- state ----------
+  const canvas = document.getElementById("radar");
+  const ctx = canvas.getContext("2d");
+  let W, H, cx, cy, R, dpr;
+  let beamAngle = 90, targetBeam = 90, lastDist = 0;
+  const blips = new Map();          // angle -> {d, t}
+  let threat = "clear";
+
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * dpr; canvas.height = H * dpr;
+    canvas.style.width = W + "px"; canvas.style.height = H + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const bottomPad = W < 640 ? 150 : 70;
+    R = Math.min(W / 2 - 24, H - bottomPad - 130);
+    R = Math.max(R, 120);
+    cx = W / 2; cy = H - bottomPad;
+  }
+  window.addEventListener("resize", resize); resize();
+
+  // angle (servo deg) -> canvas radians; 0° = right, 180° = left
+  const rad = a => ((mirror ? 180 - a : a) * Math.PI) / 180;
+  const pt = (a, r) => [cx + r * Math.cos(rad(a)), cy - r * Math.sin(rad(a))];
+  const scale = () => SCALES[scaleIdx];
+  const zoneOf = d => d > 0 && d < DANGER ? "danger" : d > 0 && d <= WARN ? "warn" : "clear";
+
+  // ---------- audio ----------
+  let actx = null, lastPing = 0, lastAlarm = 0;
+  function initAudio() {
+    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state === "suspended") actx.resume();
+  }
+  function ping(freq = 1180, dur = 1.4, vol = 0.25) {
+    if (!actx || !soundOn) return;
+    const t = actx.currentTime;
+    const o = actx.createOscillator(), g = actx.createGain();
+    const f = actx.createBiquadFilter();
+    o.type = "sine"; o.frequency.setValueAtTime(freq, t);
+    o.frequency.exponentialRampToValueAtTime(freq * 0.92, t + dur);
+    f.type = "bandpass"; f.frequency.value = freq; f.Q.value = 8;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    // echo tail
+    const d = actx.createDelay(); d.delayTime.value = 0.28;
+    const fb = actx.createGain(); fb.gain.value = 0.35;
+    o.connect(f).connect(g); g.connect(actx.destination);
+    g.connect(d); d.connect(fb).connect(d); d.connect(actx.destination);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+  function alarm() {
+    if (!actx || !soundOn) return;
+    const t = actx.currentTime;
+    const o = actx.createOscillator(), g = actx.createGain();
+    o.type = "square"; o.frequency.setValueAtTime(880, t); o.frequency.setValueAtTime(660, t + 0.12);
+    g.gain.setValueAtTime(0.06, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
+    o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.26);
+  }
+
+  document.getElementById("start").addEventListener("click", e => {
+    initAudio(); ping(1180, 1.6, 0.3);
+    e.currentTarget.style.display = "none";
+  });
+
+  window.addEventListener("keydown", e => {
+    const k = e.key.toLowerCase();
+    if (k === "+" || k === "=") scaleIdx = Math.min(SCALES.length - 1, scaleIdx + 1);
+    else if (k === "-" || k === "_") scaleIdx = Math.max(0, scaleIdx - 1);
+    else if (k === "m") { mirror = !mirror; localSet("mirror", mirror ? "1" : "0"); }
+    else if (k === "s") { soundOn = !soundOn; localSet("sound", soundOn ? "1" : "0"); }
+    else if (k === "c") blips.clear();
+  });
+
+  // ---------- data stream ----------
+  const link = document.getElementById("link");
+  const linkText = document.getElementById("linkText");
+  const linkMsg = document.getElementById("linkMsg");
+  function setLink(mode, port, msg) {
+    link.className = mode;
+    linkText.textContent = mode === "live" ? `LIVE · ${port}` : mode === "demo" ? "DEMO MODE" :
+      mode === "error" ? "LINK ERROR" : "CONNECTING…";
+    linkMsg.textContent = msg || "";
+  }
+
+  function onReading(a, d) {
+    targetBeam = a; lastDist = d;
+    const now = performance.now();
+    if (d > 0) {
+      blips.set(a, { d, t: now });
+      const z = zoneOf(d);
+      if (z === "danger" && now - lastAlarm > 700) { alarm(); lastAlarm = now; }
+      else if (d <= scale() && now - lastPing > 900) {
+        ping(z === "warn" ? 1350 : 1180, 1.2, 0.22); lastPing = now;
+      }
+    } else {
+      blips.delete(a);
+    }
+    if ((a === 0 || a === 180) && now - lastPing > 900) { ping(900, 1.6, 0.12); lastPing = now; }
+  }
+
+  function connect() {
+    const es = new EventSource("/stream");
+    es.onmessage = ev => {
+      const m = JSON.parse(ev.data);
+      if (m.type === "reading") onReading(m.angle, m.distance);
+      else if (m.type === "status") setLink(m.mode, m.port, m.message);
+    };
+    es.onerror = () => { setLink("error", null, "Server not reachable - is app.py running?"); };
+  }
+  connect();
+
+  // ---------- drawing ----------
+  function drawGrid() {
+    // background glow
+    const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 1.1);
+    bg.addColorStop(0, "rgba(10,60,30,.55)");
+    bg.addColorStop(1, "rgba(0,10,5,0)");
+    ctx.fillStyle = bg;
+    ctx.beginPath(); ctx.arc(cx, cy, R, Math.PI, 0); ctx.closePath(); ctx.fill();
+
+    ctx.lineWidth = 1;
+    ctx.font = "12px Consolas, monospace";
+    ctx.textAlign = "center";
+    const sc = scale();
+    const rings = 5;
+    for (let i = 1; i <= rings; i++) {
+      const r = (R * i) / rings;
+      const cm = Math.round((sc * i) / rings);
+      // threat-zone tinted arcs
+      ctx.strokeStyle = cm <= DANGER ? "rgba(255,51,68,.45)" : cm <= WARN ? "rgba(58,168,255,.45)" : "rgba(51,255,136,.35)";
+      ctx.beginPath(); ctx.arc(cx, cy, r, Math.PI, 0); ctx.stroke();
+      ctx.fillStyle = "rgba(157,255,198,.75)";
+      ctx.fillText(cm + " cm", cx, cy - r - 4);
+    }
+    // danger / warning zone fills
+    [[DANGER, "rgba(255,51,68,.07)"], [WARN, "rgba(58,168,255,.05)"]].forEach(([cm, col]) => {
+      if (cm > sc) return;
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.arc(cx, cy, (R * cm) / sc, Math.PI, 0); ctx.closePath(); ctx.fill();
+    });
+    // bearing spokes
+    for (let a = 0; a <= 180; a += 15) {
+      const [x, y] = pt(a, R);
+      ctx.strokeStyle = a % 45 === 0 ? "rgba(51,255,136,.35)" : "rgba(51,255,136,.13)";
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y); ctx.stroke();
+      const [lx, ly] = pt(a, R + 16);
+      ctx.fillStyle = "rgba(157,255,198,.8)";
+      ctx.fillText(a + "°", lx, ly + 4);
+    }
+    // tick marks
+    for (let a = 0; a <= 180; a += 5) {
+      const [x1, y1] = pt(a, R); const [x2, y2] = pt(a, R - (a % 15 ? 5 : 10));
+      ctx.strokeStyle = "rgba(51,255,136,.6)";
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+    // baseline
+    ctx.strokeStyle = "rgba(51,255,136,.6)";
+    ctx.beginPath(); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.stroke();
+  }
+
+  let trailDir = 1, prevBeam = 90;
+  function drawBeam() {
+    // direction the beam is travelling, for the afterglow trail
+    if (Math.abs(beamAngle - prevBeam) > 0.01) trailDir = beamAngle > prevBeam ? 1 : -1;
+    prevBeam = beamAngle;
+    const trail = 32;
+    const steps = 32;
+    for (let i = 0; i < steps; i++) {
+      const a0 = beamAngle - trailDir * (trail * i / steps);
+      const a1 = beamAngle - trailDir * (trail * (i + 1) / steps);
+      const alpha = 0.32 * (1 - i / steps) ** 2;
+      ctx.fillStyle = `rgba(51,255,136,${alpha})`;
+      ctx.beginPath(); ctx.moveTo(cx, cy);
+      const r0 = rad(a0), r1 = rad(a1);
+      ctx.arc(cx, cy, R, -r0, -r1, (-r1) < (-r0));
+      ctx.closePath(); ctx.fill();
+    }
+    // bright leading line
+    const [x, y] = pt(beamAngle, R);
+    ctx.save();
+    ctx.shadowColor = "#33ff88"; ctx.shadowBlur = 22;
+    const lg = ctx.createLinearGradient(cx, cy, x, y);
+    lg.addColorStop(0, "rgba(51,255,136,.2)"); lg.addColorStop(1, "rgba(180,255,210,1)");
+    ctx.strokeStyle = lg; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y); ctx.stroke();
+    ctx.restore();
+    // hub
+    ctx.fillStyle = "#33ff88";
+    ctx.shadowColor = "#33ff88"; ctx.shadowBlur = 14;
+    ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+
+  function drawBlips(now) {
+    const sc = scale();
+    for (const [a, b] of blips) {
+      const age = now - b.t;
+      if (age > BLIP_LIFE) { blips.delete(a); continue; }
+      if (b.d > sc) continue;
+      const fade = 1 - age / BLIP_LIFE;
+      const [x, y] = pt(a, (R * b.d) / sc);
+      const z = zoneOf(b.d);
+      const col = z === "danger" ? "255,51,68" : z === "warn" ? "255,90,90" : "255,70,70";
+      const size = 4 + 3 * fade;
+      ctx.save();
+      ctx.shadowColor = `rgba(${col},1)`; ctx.shadowBlur = 16 * fade;
+      ctx.fillStyle = `rgba(${col},${0.25 + 0.75 * fade})`;
+      ctx.beginPath(); ctx.arc(x, y, size, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+      if (age < 600) { // fresh-echo ring
+        ctx.strokeStyle = `rgba(${col},${1 - age / 600})`;
+        ctx.beginPath(); ctx.arc(x, y, size + age / 25, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+  }
+
+  // group neighbouring blips into contacts
+  function contacts() {
+    const pts = [...blips.entries()].filter(([, b]) => b.d <= scale()).sort((p, q) => p[0] - q[0]);
+    const groups = [];
+    for (const [a, b] of pts) {
+      const g = groups[groups.length - 1];
+      if (g && a - g.lastA <= 3 && Math.abs(b.d - g.lastD) < 15) {
+        g.as.push(a); g.ds.push(b.d); g.lastA = a; g.lastD = b.d;
+      } else groups.push({ as: [a], ds: [b.d], lastA: a, lastD: b.d });
+    }
+    return groups.map(g => ({
+      angle: Math.round(g.as.reduce((s, v) => s + v, 0) / g.as.length),
+      d: Math.min(...g.ds)
+    })).sort((p, q) => p.d - q.d);
+  }
+
+  let lastHud = 0;
+  function drawLabels(list) {
+    ctx.font = "bold 12px Consolas, monospace";
+    ctx.textAlign = "left";
+    for (const c of list.slice(0, 6)) {
+      const [x, y] = pt(c.angle, (R * c.d) / scale());
+      const z = zoneOf(c.d);
+      ctx.fillStyle = z === "danger" ? "#ff3344" : z === "warn" ? "#7fc4ff" : "#ff8888";
+      ctx.fillText(`${c.d}cm ∠${c.angle}°`, x + 10, y - 8);
+    }
+  }
+
+  function updateHud(list, now) {
+    if (now - lastHud < 120) return;
+    lastHud = now;
+    document.getElementById("rAngle").textContent = String(Math.round(targetBeam)).padStart(3, "0");
+    document.getElementById("rDist").textContent = lastDist > 0 ? lastDist + " cm" : "NO ECHO";
+    document.getElementById("rScale").textContent = scale();
+    const near = list[0];
+    document.getElementById("rNear").textContent = near ? `${near.d} cm @ ${near.angle}°` : "---";
+
+    const z = near ? zoneOf(near.d) : "clear";
+    if (z !== threat) {
+      threat = z;
+      const el = document.getElementById("alert");
+      el.className = "hud " + z;
+      el.textContent = z === "danger" ? "⚠ COLLISION ALERT ⚠" : z === "warn" ? "CONTACT · CLOSING" : "ALL CLEAR";
+    }
+
+    const box = document.getElementById("contactList");
+    box.innerHTML = list.length ? list.slice(0, 8).map((c, i) =>
+      `<div class="row ${zoneOf(c.d)}"><span>T${String(i + 1).padStart(2, "0")} ∠${String(c.angle).padStart(3, "0")}°</span><span>${c.d} cm</span></div>`
+    ).join("") : '<div style="opacity:.5">NO CONTACTS</div>';
+  }
+
+  function frame(now) {
+    // smooth the beam toward the latest servo angle
+    beamAngle += (targetBeam - beamAngle) * 0.35;
+    ctx.fillStyle = "#010805";
+    ctx.fillRect(0, 0, W, H);
+    drawGrid();
+    drawBeam();
+    drawBlips(now);
+    const list = contacts();
+    drawLabels(list);
+    updateHud(list, now);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
